@@ -1,0 +1,50 @@
+# 腹膜透析方式與個人化處方工作站
+
+北港院區成人慢性腹膜透析決策支援網頁。APD 機型：Baxter HomeChoice Claria；Low Ca：2.5 mEq/L（1.25 mmol/L）。
+
+## 功能
+
+- 初始處方不要求 PET；依臨床與可行性建議 CAPD／APD。
+- 治療中調整及 PET 後最佳化，顯示推薦理由、替代模式和缺少資料。
+- 計算 D/P Cr、D/D₀ glucose、PET 淨超濾與選填 sodium dip。
+- 編輯 CAPD 交換或 APD 夜間設定；計算袋數、院內醫令碼、灌入葡萄糖量。
+- 醫師核對後複製／下載會診文字，或列印成 PDF。
+- 病人資料僅在瀏覽器記憶體內處理，不上传、無自動儲存、無追蹤服務。
+
+## 使用
+
+開啟 dist/index.html，或由 GitHub Pages 存取。以「載入示範」測試操作；示範個案均明確標示。正式個案先清空資料。
+
+來源及發布資料夾為 dist，GitHub Actions 發布此資料夾，網站使用相對路徑，支援 /PD/。在 Settings → Pages 選擇 GitHub Actions 作為來源。執行 `node tests.cjs` 可檢查核心臨床規則與算術。
+
+## 判定與模板
+
+模式判定：排除危急／感染／導管問題；依 PET、病人偏好、機器與照護可行性、既有模式及可用夜間時間排列 CAPD／APD。顯示所有觸發理由。此排序為透明的工作站規則，不是經驗證的預後分數。
+
+一般起點：CAPD 4 次交換（快速運輸可用 5 次草案）；APD 4 循環、最多 8 小時（快速運輸 5 循環；慢運輸 3 循環、最多 10 小時）。醫師輸入已確認的灌注耐受量；夜間時間不超過病人可用時間。容量過多時以 2.5% 為可編輯起點，其餘 1.5%。這些數值是草案模板，非 ISPD 固定推薦劑量。不能據此預測 Kt/V 或實際 UF。
+
+增量式模板須有殘餘腎臟 Kt/V、臨床穩定與醫師确认。CAPD 3 次交換、可有計畫乾腹；APD 3 循環。需以實測总清除与症狀決定是否合理，不能只根據尿量降低劑量。
+
+傳統 4h D/P Cr 分組：<0.50、0.50–<0.65、0.65–<0.82、≥0.82。依 Twardowski Fast PET 參考分組作連續化呈現；原文 0.65 為平均值，本工具歸較高組，實驗室分類可覆寫。UF 篩查僅於 2 L 標準試驗套用 2.5% <100 mL／4.25% <400 mL，須核對採樣、overfill 與殘留量。Cr 葡萄糖干擾須校正或確認方法不受影響。
+
+Icodextrin 限每日一次長留置；本版 CAPD 6–12h、APD 14–16h（參照產品資訊）。需确认適用性、過敏史及血糖檢測相容性。Nutrineal 不自動加入，僅於 CAPD 編輯選用，需核對仿單禁忌及營養需求。
+
+## 限制
+
+- 成人慢性維持 PD。急起始／新置管、疑似腹膜炎、導管問題或急性危急狀況轉為人工評估，無自動處方。
+- 第一版為常規完整引流 APD 循環，未提供 tidal 或額外日間手動交換自動排程。需要時另行人工處方。
+- Claria 核對摘要非直接機器指令；預充、灌入及引流時間由團隊依實機紀錄輸入，需核對實際循環與顯示。
+- 袋數是單次使用供應規劃，非保證機器連接配置；接頭、袋位與最後灌注來源須人工核對。
+- 鈣配方由醫師選擇；不因單一 Ca 或 albumin 自動切換。一般配方、icodextrin 與 Nutrineal 的鈣濃度不臆測。
+- 不提供療效預測或機器控制；未經前瞻臨床驗證。
+
+## 來源
+
+- ISPD 2020 goal-directed PD： https://doi.org/10.1177/0896860819895364
+- ISPD 2021 membrane dysfunction： https://doi.org/10.1177/0896860820982218
+- Twardowski, The Fast PET (1990)：https://www.researchgate.net/profile/Zbylut-Twardowski-2/publication/229649324_The_Fast_Peritoneal_Equilibration_Test/links/5bbf5c6992851c88fd6505ab/The-Fast-Peritoneal-Equilibration-Test.pdf
+- Icodextrin：https://www.medicines.org.uk/emc/product/1819/smpc
+- Nutrineal：https://www.medicines.org.uk/emc/product/1843/smpc
+- 院內「腹膜透析藥委規格與機器型號.xlsx」及醫師確認 Low Ca 2.5 mEq/L。
+
+產品資訊以台灣仿單與院內規範為準。版本：1.0，2026-10-01。
