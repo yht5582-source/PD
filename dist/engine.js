@@ -2,6 +2,12 @@
 const PD = (() => {
   const types={low:'低運輸',lowAvg:'較低運輸',highAvg:'較高運輸',high:'高運輸'};
   const num=x=>x===''||x==null?null:Number(x);
+  const symptomLabels={none:'無明顯症狀',appetite:'食慾下降',nausea:'噁心',vomiting:'嘔吐',fatigue:'疲倦／無力',itch:'持續或難治性搔癢',sleep:'睡眠障礙／不寧腿',cognition:'注意力／認知下降',nutrition:'非預期體重下降／營養惡化',encephalopathy:'疑似尿毒性腦病',pericarditis:'疑似尿毒性心包膜炎'};
+  function symptoms(d){
+    const list=Array.isArray(d.symptoms)?d.symptoms:null;
+    const present=list?list.some(x=>x!=='none'):d.symptom==='yes';
+    return {list:list||[],present,related:present&&d.symptomAttribution!=='other',urgent:!!list&&list.some(x=>['encephalopathy','pericarditis'].includes(x)),labels:list?list.map(x=>symptomLabels[x]||x):[present?'有症狀（未細分）':'無明顯症狀']};
+  }
   function renal(d){
     const cr=num(d.serumCr),egfr=num(d.egfr),ccr=num(d.ccr),kru=num(d.kru),rktv=num(d.renalKtv);
     const valid=d.collection==='valid',stable=d.renalStability!=='changing';
@@ -24,14 +30,22 @@ const PD = (() => {
     if(d.stage!=='initial')Object.assign(required,{currentMode:'目前方式',uf:'每日 PD 淨超濾',currentFill:'目前灌注量',currentCycles:'目前交換／循環次數',adherence:'執行狀態'});
     if(d.stage==='pet')Object.assign(required,{petDate:'PET 日期',petConcentration:'PET 濃度',petIn:'PET 灌入量',petOut:'PET 引流量',dp:'4 小時 D/P Cr',crCorrection:'Cr 校正確認'});
     for(const [key,label] of Object.entries(required))if(d[key]===''||d[key]==null)missing.push(label);
-    const kidney=renal(d);
+    const kidney=renal(d),sx=symptoms(d);
+    if(Array.isArray(d.symptoms)){
+      if(!d.symptoms.length)missing.push('尿毒症症狀（可複選，無症狀請明確勾選）');
+      if(d.symptoms.includes('none')&&sx.present)blocks.push('無明顯症狀不能與其他症狀同時勾選。');
+      if(d.symptoms.some(x=>!Object.hasOwn(symptomLabels,x)))blocks.push('症狀選項無效，請重新選擇。');
+      if(sx.present&&!['mild','moderate','severe'].includes(d.symptomSeverity))missing.push('整體症狀嚴重度');
+      if(sx.present&&!['likely','uncertain','other'].includes(d.symptomAttribution))missing.push('症狀臨床歸因評估');
+    }
+    if(sx.urgent)blocks.push('疑似尿毒性腦病或心包膜炎：需即時評估與適當透析支持，暫停常規 CAPD／APD 草案。');
     if(d.stage==='initial'&&!kidney.hasBaseline)missing.push('初始腎功能資料：血清 Cr／eGFR／實測 CCr／Kru 至少一項');
     if(missing.length)return {missing,blocks,warnings,reasons,adjustments};
     const age=num(d.age),fill=num(d.fill),k=num(d.potassium),hco=num(d.bicarb);
     if(age<18||age>120)blocks.push('本版僅適用成人慢性 PD，年齡須介於 18–120 歲。');
     if(fill<500||fill>2500)blocks.push('灌注量超出本版可用範圍 500–2500 mL，需人工處方。');
     if(d.acute||k>=6.5||hco<10)blocks.push('需即時評估的急性狀況：暫停例行慢性 PD 草案，評估急性處置與適當透析支持。');
-    if(d.infection)blocks.push('疑似腹膜炎：先評估透析液、感染與治療，暫停例行處方最佳化。');
+    if(d.stage!=='initial'&&d.infection)blocks.push('疑似腹膜炎：先評估透析液、感染與治療，暫停例行處方最佳化。');
     if(d.access==='urgent')blocks.push('新置管／急起始 PD 需專屬低灌注量、仰臥與漏液監測流程；本版不自動套用常規維持處方。');
     if(d.access==='problem'||d.adherence==='drain')blocks.push('先處理導管、引流、漏液或疝氣問題，不能以增加濃度／劑量直接取代評估。');
     if(d.apdReady==='no'&&d.capdReady==='no')blocks.push('兩種模式目前皆無法執行，需建立輔助 PD／照護支持或討論其他方式。');
@@ -40,7 +54,7 @@ const PD = (() => {
     if(p&&(p.ratio<=0||p.ratio>1.2))blocks.push('D/P Cr 超出有效輸入範圍。');
     if(d.dose==='incremental'){
       if(!d.incrementalSafe||!kidney.incrementalEvidence)missing.push('增量式 PD：完整定時尿實測 Kru 或腎臟 Kt/V、腎功能穩定與醫師評估確認');
-      if(d.volume!=='euvolemic'||d.symptom==='yes'||k>5.5||hco<22)blocks.push('存在容量／清除或生化控制問題，暫不產生增量式低劑量模板。');
+      if(d.volume!=='euvolemic'||symptoms(d).related||k>5.5||hco<22)blocks.push('存在容量／清除或生化控制問題，暫不產生增量式低劑量模板。');
     }
     if(blocks.length||missing.length)return {missing,blocks,warnings,reasons,adjustments,pet:p};
     let apd=0,capd=0;
@@ -63,10 +77,15 @@ const PD = (() => {
     let mode=apd>capd?'APD':'CAPD';
     if(d.apdReady==='no')mode='CAPD';if(d.capdReady==='no')mode='APD';
     if(mode==='APD'&&(hours===null||hours<4||hours>14))missing.push('APD 可用夜間時間（4–14 小時）');
+    if(sx.present){
+      reasons.push('症狀：'+sx.labels.join('、')+'；嚴重度 '+({mild:'輕度',moderate:'中度',severe:'重度'}[d.symptomSeverity]||'未細分')+'。症狀不單獨決定 CAPD／APD。');
+      if(d.stage==='initial')adjustments.push(sx.related?'初始有可能與尿毒症相關的症狀：整合起始時機、腎功能、容量與生化資料評估清除需求；起始後早期複評症狀與攝食，不先假定 Kt/V 或自動增加循環。':'症狀已評估主要為其他原因：處理該病因，並追蹤透析後症狀變化。');
+      if(d.symptomAttribution==='uncertain')warnings.push('症狀歸因尚未確定：評估貧血、藥物、感染、睡眠與營養等其他原因，不直接視為透析清除不足。');
+    }else if(d.stage==='initial')reasons.push('已確認無明顯尿毒症症狀；起始需求仍整合容量、生化、腎功能與病人偏好。');
     if(d.adherence==='missed')adjustments.push('先改善漏做／中斷原因與實際完成量，再決定是否增加處方。');
     if(d.volume==='overload')adjustments.push('容量過多：核對鹽水攝取、目標體重、尿量與每日淨超濾；評估短留置／長留置用液，避免只靠長期提高葡萄糖濃度。');
     if(d.volume==='depleted'){warnings.push('疑似容量不足：先重新評估目標體重、攝取及用藥，不自動提高滲透濃度。');adjustments.push('液體濃度以 1.5% 起點，醫師核對是否須減少超濾。');}
-    if(d.symptom==='yes'||k>5.5||hco<22)adjustments.push('清除／生化控制需改善：核對執行、收集、營養與用藥，評估增加交換量或時間。');
+    if(symptoms(d).related||k>5.5||hco<22)adjustments.push(d.stage==='initial'?'依症狀與生化狀態確認足夠的起始清除需求；常規模板須依起始後療效調整。':'清除／生化控制需改善：核對執行、收集、營養與用藥，評估增加交換量或時間。');
     const r=num(d.renalKtv),q=num(d.pdKtv),ktv=d.stage!=='initial'&&r!==null&&q!==null?r+q:null;
     if(kidney.mean!==null)reasons.push(`完整定時尿平均腎臟清除率（CCr＋Kru）/2＝${kidney.mean.toFixed(2)} mL/min，納入殘餘腎功能與劑量評估。`);
     else if(kidney.hasData)reasons.push('已納入腎功能資料；Cr／eGFR 作為初始背景，實測尿液清除率用於殘餘清除評估。腎功能數值本身不決定 CAPD 或 APD。');
@@ -75,7 +94,7 @@ const PD = (() => {
     if((kidney.ccr!==null||kidney.kru!==null||kidney.rktv!==null)&&!kidney.valid)warnings.push('定時尿液收集品質未確認，實測清除資料暫不作增量式 PD 依據。');
     if(!kidney.stable)warnings.push('腎功能處於變動中：先評估急性因素與趨勢，不依單次 Cr／eGFR 降低透析劑量。');
     if(ktv!==null&&ktv<1.7)warnings.push('實測總 weekly Kt/V <1.7：需再評估清除及收集品質；不以此單一數字決定加量。');
-    if(d.dose==='standard'&&num(d.urine)>=500&&d.volume==='euvolemic'&&d.symptom==='none')warnings.push('仍有尿量且臨床穩定，可評估增量式 PD；需先取得殘餘清除率，尿量本身不夠。');
+    if(d.dose==='standard'&&num(d.urine)>=500&&d.volume==='euvolemic'&&!sx.present)warnings.push('仍有尿量且臨床穩定，可評估增量式 PD；需先取得殘餘清除率，尿量本身不夠。');
     if(d.calcium==='low')warnings.push('Low Ca 已設定 2.5 mEq/L；須整合 Ca、P、PTH、鈣劑與維生素 D，低鈣血症時重新評估配方。');
     const alternate=mode==='APD'?'CAPD':'APD', altReady=d[alternate==='APD'?'apdReady':'capdReady']==='yes';
     reasons.push(mode==='APD'?'APD 可行，依 PET 與偏好排列為優先方式；具體劑量需以實測療效調整。':'CAPD 可行，依較長留置、偏好或既有模式排列為優先方式。');
@@ -108,7 +127,7 @@ const PD = (() => {
     function solution(kind,vol,conc){if(kind==='glucose')glucose+=vol*conc/100;if(kind==='aa')aa+=vol*0.011;}
     if(rx.mode==='CAPD'){
       if(rx.rows.length<1||rx.rows.length>6)errors.push('CAPD 交換次數超出本版範圍。');
-      for(const row of rx.rows){volume(row.volume);if(!Number.isFinite(row.dwell)||row.dwell<=0)errors.push('留置時間須大於 0。');dwell+=row.dwell;total+=row.volume;solution(row.kind,row.volume,row.concentration);const product=chooseProduct(catalog,'CAPD',row);add(product,1,row.volume);if(row.kind==='ico'){icoCount++;if(row.dwell<6||row.dwell>12)errors.push('CAPD icodextrin 長留置請設定 6–12 小時。');}if(row.kind==='aa'&&(Number(d.bicarb)<22||Number(d.potassium)<3||d.symptom==='yes'||num(d.bun)===null||Number(d.bun)>106.4))errors.push('Nutrineal 須核對 BUN、代謝性酸中毒、尿毒症症狀及低血鉀；目前資料不適合產生此草案。');if(row.kind==='aa')warnings.push('Nutrineal：2 L 內含 22 g 胺基酸，非等同全數吸收。確認營養需求、餐食熱量、肝功能、過敏及胺基酸代謝禁忌；本版不自動加入。');}
+      for(const row of rx.rows){volume(row.volume);if(!Number.isFinite(row.dwell)||row.dwell<=0)errors.push('留置時間須大於 0。');dwell+=row.dwell;total+=row.volume;solution(row.kind,row.volume,row.concentration);const product=chooseProduct(catalog,'CAPD',row);add(product,1,row.volume);if(row.kind==='ico'){icoCount++;if(row.dwell<6||row.dwell>12)errors.push('CAPD icodextrin 長留置請設定 6–12 小時。');}if(row.kind==='aa'&&(Number(d.bicarb)<22||Number(d.potassium)<3||symptoms(d).related||num(d.bun)===null||Number(d.bun)>106.4))errors.push('Nutrineal 須核對 BUN、代謝性酸中毒、尿毒症症狀及低血鉀；目前資料不適合產生此草案。');if(row.kind==='aa')warnings.push('Nutrineal：2 L 內含 22 g 胺基酸，非等同全數吸收。確認營養需求、餐食熱量、肝功能、過敏及胺基酸代謝禁忌；本版不自動加入。');}
       if(dwell>24.01)errors.push('CAPD 各次留置時間合計超過 24 小時。');
       if(dwell<23.99&&d.dose!=='incremental')errors.push('常規 CAPD 留置合計須為 24 小時；有計畫乾腹時請採增量式並完成確認。');
       if(rx.rows.filter(x=>x.kind==='aa').length>1)errors.push('本版 Nutrineal 僅允許每日一次，額外使用需人工評估。');
@@ -141,6 +160,6 @@ const PD = (() => {
     if(d.volume==='depleted'&&((rx.mode==='APD'&&rx.nightConcentration>1.5)||rx.rows.some(x=>x.kind==='glucose'&&x.concentration>1.5)))warnings.push('容量不足狀態仍使用較高葡萄糖濃度，需重新評估。');
     return {errors:[...new Set(errors)],warnings:[...new Set(warnings)],bags:[...bags.values()],total,glucose,aa,dwell,icoCount};
   }
-  return {num,renal,pet,assess,initialRx,validateRx,chooseProduct,types};
+  return {num,symptoms,symptomLabels,renal,pet,assess,initialRx,validateRx,chooseProduct,types};
 })();
 if(typeof module!=='undefined')module.exports=PD;
