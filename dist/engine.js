@@ -114,6 +114,37 @@ const PD = (() => {
     } else if(long==='dry'){rx.lastVolume=0;rx.lastKind='dry';}
     return rx;
   }
+  function goals(d,a,rx,total){
+    const intake=num(d.intake),urine=num(d.urine),loss=num(d.otherLoss),excess=num(d.excessFluid),days=num(d.correctionDays),manual=num(d.manualUfGoal);
+    const errors=[],missing=[];
+    for(const [value,limit,label] of [[intake,10000,'液體攝取'],[urine,10000,'尿量'],[loss,5000,'腎外淨流失'],[excess,20,'多餘水分'],[manual,6000,'指定 UF 目標']])if(value!==null&&(!Number.isFinite(value)||value<0||value>limit))errors.push(label+'超出有效範圍。');
+    if(excess!==null&&excess>0&&(days===null||!Number.isInteger(days)||days<1||days>60))missing.push('容量矯正天數（1–60 天整數）');
+    if(excess!==null&&excess>0&&d.volume!=='overload')errors.push('多餘水分大於 0 與容量評估不一致，請先重新核對。');
+    if(intake===null)missing.push('每日總液體攝取');if(loss===null)missing.push('腎外淨水分流失估計');if(excess===null)missing.push('醫師確認多餘水分（無則填 0）');
+    const calculated=errors.length===0&&missing.length===0&&urine!==null?intake-urine-loss+(excess>0?excess*1000/days:0):null;
+    let ufGoal=errors.length?null:manual!==null?manual:calculated===null?null:Math.max(0,calculated);
+    if(ufGoal!==null&&ufGoal>6000){ufGoal=null;errors.push('估計 UF 超出本工具 6000 mL/day 範圍，需人工評估，勿自動採用。');}
+
+    if(d.volume==='depleted'){ufGoal=null;errors.push('容量不足：暫不提供自動脫水目標，先評估補液、目標體重及用藥。');}
+    const confirmed=ufGoal!==null&&!!d.fluidGoalSafe,actual=d.stage==='initial'?null:num(d.uf);
+    const target=num(d.ktvGoal)||1.7,measured=a.ktv,ktvReliable=d.stage!=='initial'&&measured!==null&&d.collection==='valid'&&d.dialysateCollection==='valid';
+    const notes=['目標不是此處方的預測效果，需用實測資料確認。'];
+    if(calculated!==null&&calculated<0)notes.push('水分收支估計為負值：先評估容量不足或攝取需求；0 mL 並非可自動採用的乾腹處方。');
+    if(manual!==null&&calculated!==null&&Math.abs(manual-Math.max(0,calculated))>100)notes.push('醫師指定目標與收支估計不同，請於醫師補充記錄理由。');
+    if(actual!==null&&confirmed&&actual<ufGoal)notes.push('淨 UF 低於本次目標 '+Math.round(ufGoal-actual)+' mL/day：核對實際完成量、攝取與鹽分、引流／漏液；依 PET 與實测反應調整留置、用液或日間交換。');
+    if(actual!==null&&confirmed&&actual>=ufGoal&&d.volume!=='euvolemic')notes.push('UF 數值達目標，但容量尚未穩定，不能判為整體達標。');
+    if(ktvReliable&&measured<target)notes.push('實測總 Kt/V 低於檢核參考：先核對完整收集與執行，再評估增加可耐受總交換量、有效留置或日間交換；不按 Kt/V 比例直接放大劑量。');
+    if(symptoms(d).related)notes.push('仍有可能與尿毒症相關的症狀：即使 Kt/V 達參考值仍需評估，症狀改善才是臨床追蹤目標之一。');
+    return {total,calculated,ufGoal,confirmed,actual,target,measured,ktvReliable,errors,missing,notes,checks:[
+      {name:'每日透析液處方量',status:(total/1000).toFixed(1)+' L/day',detail:rx.mode==='CAPD'?rx.rows.length+' 次交換／日':rx.cycles+' 循環／夜，'+rx.hours+' 小時；含最後灌注'},
+      {name:'淨 UF 目標',status:ufGoal===null?'待補齊／重新評估':Math.round(ufGoal)+' mL/day'+(confirmed?'（已確認目標）':'（待醫師確認）'),detail:manual!==null?'醫師指定':calculated!==null?'水分收支估計':'請補資料或指定個別目標'},
+      {name:'實測淨 UF 檢核',status:actual===null?'治療後才能確認':!confirmed?'待確認追蹤目標':actual>=ufGoal?'數值達目標':'未達目標',detail:actual===null?'初始不預測 UF':actual+' mL/day；容量狀態另核對'},
+      {name:'實測總 weekly Kt/V',status:d.stage==='initial'?'治療後才能確認':!ktvReliable?'待可靠完整收集':measured>=target?'達清除參考':'低於清除參考',detail:'參考 '+target+'；'+(measured===null?'未提供實測值':'實測 '+measured.toFixed(2))+'；不是唯一充分性標準'},
+      {name:'容量狀態',status:d.volume==='euvolemic'?'目前穩定':'需改善／重新評估',detail:'依水腫、體重與血壓持續追蹤'},
+      {name:'症狀',status:symptoms(d).related?'需鑑別與改善':symptoms(d).present?'追蹤其他原因':'無明顯症狀',detail:'追蹤攝食、活動能力與營養'},
+      {name:'生化檢核',status:Number(d.potassium)>=3.5&&Number(d.potassium)<=5.5&&Number(d.bicarb)>=22&&Number(d.bicarb)<=29?'K／HCO₃⁻ 參考範圍內':'K／HCO₃⁻ 需評估',detail:'K 3.5–5.5、HCO₃⁻ 22–29 為本工具追蹤參考；P、營養及其他因素另評估'}
+    ]};
+  }
   function chooseProduct(catalog,mode,row){
     const selected=catalog.find(x=>x.code===row.productCode&&x.mode===mode&&x.kind===row.kind&&x.bag>=row.volume&&(row.kind!=='glucose'||(x.concentration===Number(row.concentration)&&x.lowCa===row.lowCa)));
     if(selected)return selected;
@@ -160,6 +191,6 @@ const PD = (() => {
     if(d.volume==='depleted'&&((rx.mode==='APD'&&rx.nightConcentration>1.5)||rx.rows.some(x=>x.kind==='glucose'&&x.concentration>1.5)))warnings.push('容量不足狀態仍使用較高葡萄糖濃度，需重新評估。');
     return {errors:[...new Set(errors)],warnings:[...new Set(warnings)],bags:[...bags.values()],total,glucose,aa,dwell,icoCount};
   }
-  return {num,symptoms,symptomLabels,renal,pet,assess,initialRx,validateRx,chooseProduct,types};
+  return {num,goals,symptoms,symptomLabels,renal,pet,assess,initialRx,validateRx,chooseProduct,types};
 })();
 if(typeof module!=='undefined')module.exports=PD;
