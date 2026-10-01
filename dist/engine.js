@@ -2,6 +2,11 @@
 const PD = (() => {
   const types={low:'低運輸',lowAvg:'較低運輸',highAvg:'較高運輸',high:'高運輸'};
   const num=x=>x===''||x==null?null:Number(x);
+  function renal(d){
+    const cr=num(d.serumCr),egfr=num(d.egfr),ccr=num(d.ccr),kru=num(d.kru),rktv=num(d.renalKtv);
+    const valid=d.collection==='valid',stable=d.renalStability!=='changing';
+    return {cr,egfr,ccr,kru,rktv,valid,stable,mean:valid&&ccr!==null&&kru!==null?(ccr+kru)/2:null,hasData:[cr,egfr,ccr,kru,rktv].some(x=>x!==null),hasBaseline:[cr,egfr,ccr,kru].some(x=>x!==null),incrementalEvidence:valid&&stable&&((kru!==null&&kru>0)||(rktv!==null&&rktv>0))};
+  }
   function pet(d){
     const ratio=num(d.dp), input=num(d.petIn), output=num(d.petOut);
     const transport=ratio===null?null:ratio<0.5?'low':ratio<0.65?'lowAvg':ratio<0.82?'highAvg':'high';
@@ -19,6 +24,8 @@ const PD = (() => {
     if(d.stage!=='initial')Object.assign(required,{currentMode:'目前方式',uf:'每日 PD 淨超濾',currentFill:'目前灌注量',currentCycles:'目前交換／循環次數',adherence:'執行狀態'});
     if(d.stage==='pet')Object.assign(required,{petDate:'PET 日期',petConcentration:'PET 濃度',petIn:'PET 灌入量',petOut:'PET 引流量',dp:'4 小時 D/P Cr',crCorrection:'Cr 校正確認'});
     for(const [key,label] of Object.entries(required))if(d[key]===''||d[key]==null)missing.push(label);
+    const kidney=renal(d);
+    if(d.stage==='initial'&&!kidney.hasBaseline)missing.push('初始腎功能資料：血清 Cr／eGFR／實測 CCr／Kru 至少一項');
     if(missing.length)return {missing,blocks,warnings,reasons,adjustments};
     const age=num(d.age),fill=num(d.fill),k=num(d.potassium),hco=num(d.bicarb);
     if(age<18||age>120)blocks.push('本版僅適用成人慢性 PD，年齡須介於 18–120 歲。');
@@ -32,7 +39,7 @@ const PD = (() => {
     const p=d.stage==='pet'?pet(d):null;
     if(p&&(p.ratio<=0||p.ratio>1.2))blocks.push('D/P Cr 超出有效輸入範圍。');
     if(d.dose==='incremental'){
-      if(!d.incrementalSafe||num(d.renalKtv)===null)missing.push('增量式 PD：殘餘腎臟 Kt/V 與醫師評估確認');
+      if(!d.incrementalSafe||!kidney.incrementalEvidence)missing.push('增量式 PD：完整定時尿實測 Kru 或腎臟 Kt/V、腎功能穩定與醫師評估確認');
       if(d.volume!=='euvolemic'||d.symptom==='yes'||k>5.5||hco<22)blocks.push('存在容量／清除或生化控制問題，暫不產生增量式低劑量模板。');
     }
     if(blocks.length||missing.length)return {missing,blocks,warnings,reasons,adjustments,pet:p};
@@ -60,7 +67,13 @@ const PD = (() => {
     if(d.volume==='overload')adjustments.push('容量過多：核對鹽水攝取、目標體重、尿量與每日淨超濾；評估短留置／長留置用液，避免只靠長期提高葡萄糖濃度。');
     if(d.volume==='depleted'){warnings.push('疑似容量不足：先重新評估目標體重、攝取及用藥，不自動提高滲透濃度。');adjustments.push('液體濃度以 1.5% 起點，醫師核對是否須減少超濾。');}
     if(d.symptom==='yes'||k>5.5||hco<22)adjustments.push('清除／生化控制需改善：核對執行、收集、營養與用藥，評估增加交換量或時間。');
-    const r=num(d.renalKtv),q=num(d.pdKtv),ktv=r!==null&&q!==null?r+q:null;
+    const r=num(d.renalKtv),q=num(d.pdKtv),ktv=d.stage!=='initial'&&r!==null&&q!==null?r+q:null;
+    if(kidney.mean!==null)reasons.push(`完整定時尿平均腎臟清除率（CCr＋Kru）/2＝${kidney.mean.toFixed(2)} mL/min，納入殘餘腎功能與劑量評估。`);
+    else if(kidney.hasData)reasons.push('已納入腎功能資料；Cr／eGFR 作為初始背景，實測尿液清除率用於殘餘清除評估。腎功能數值本身不決定 CAPD 或 APD。');
+    if(kidney.egfr!==null)warnings.push('eGFR 為估計且依 1.73 m² 校正，不當作實測 Kru／CCr，也不直接換算腎臟 Kt/V。透析病人或非穩定腎功能時需審慎解讀。');
+    if(kidney.ccr!==null&&kidney.kru===null)warnings.push('單獨 CCr 可能因肌酐小管分泌高估殘餘腎功能，建議補齊尿素清除率；不能僅據此減少 PD 劑量。');
+    if((kidney.ccr!==null||kidney.kru!==null||kidney.rktv!==null)&&!kidney.valid)warnings.push('定時尿液收集品質未確認，實測清除資料暫不作增量式 PD 依據。');
+    if(!kidney.stable)warnings.push('腎功能處於變動中：先評估急性因素與趨勢，不依單次 Cr／eGFR 降低透析劑量。');
     if(ktv!==null&&ktv<1.7)warnings.push('實測總 weekly Kt/V <1.7：需再評估清除及收集品質；不以此單一數字決定加量。');
     if(d.dose==='standard'&&num(d.urine)>=500&&d.volume==='euvolemic'&&d.symptom==='none')warnings.push('仍有尿量且臨床穩定，可評估增量式 PD；需先取得殘餘清除率，尿量本身不夠。');
     if(d.calcium==='low')warnings.push('Low Ca 已設定 2.5 mEq/L；須整合 Ca、P、PTH、鈣劑與維生素 D，低鈣血症時重新評估配方。');
@@ -68,7 +81,7 @@ const PD = (() => {
     reasons.push(mode==='APD'?'APD 可行，依 PET 與偏好排列為優先方式；具體劑量需以實測療效調整。':'CAPD 可行，依較長留置、偏好或既有模式排列為優先方式。');
     if(mode==='APD'&&slow)warnings.push('較慢運輸者採 APD：避免過多短循環，保留足夠夜間留置並評估日間交換。');
     if(mode==='CAPD'&&fast)warnings.push('较快運輸者採 CAPD：避免葡萄糖液過長留置，考慮縮短交換或以 icodextrin 作長留置。');
-    return {missing,blocks,warnings,reasons,adjustments,pet:p,mode,alternate:altReady?alternate:null,ktv,bsa:Math.sqrt(num(d.height)*num(d.weight)/3600),fast,slow};
+    return {missing,blocks,warnings,reasons,adjustments,pet:p,kidney,mode,alternate:altReady?alternate:null,ktv,bsa:Math.sqrt(num(d.height)*num(d.weight)/3600),fast,slow};
   }
   function initialRx(d,a){
     const incremental=d.dose==='incremental',fill=num(d.fill),hours=num(d.sleep)||8;
@@ -128,6 +141,6 @@ const PD = (() => {
     if(d.volume==='depleted'&&((rx.mode==='APD'&&rx.nightConcentration>1.5)||rx.rows.some(x=>x.kind==='glucose'&&x.concentration>1.5)))warnings.push('容量不足狀態仍使用較高葡萄糖濃度，需重新評估。');
     return {errors:[...new Set(errors)],warnings:[...new Set(warnings)],bags:[...bags.values()],total,glucose,aa,dwell,icoCount};
   }
-  return {num,pet,assess,initialRx,validateRx,chooseProduct,types};
+  return {num,renal,pet,assess,initialRx,validateRx,chooseProduct,types};
 })();
 if(typeof module!=='undefined')module.exports=PD;

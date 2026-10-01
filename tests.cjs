@@ -1,6 +1,6 @@
 const assert=require('node:assert/strict');
 const PD=require('./dist/engine.js');const C=require('./dist/catalog.js');
-const d={stage:'initial',age:65,height:165,weight:62,urine:600,volume:'euvolemic',symptom:'none',access:'healed',apdReady:'yes',capdReady:'yes',potassium:4.5,bicarb:24,fill:2000,calcium:'low',preference:'either',dose:'standard',sleep:8,longSolution:'auto',icoSafe:true};
+const d={stage:'initial',serumCr:8,egfr:6,age:65,height:165,weight:62,urine:600,volume:'euvolemic',symptom:'none',access:'healed',apdReady:'yes',capdReady:'yes',potassium:4.5,bicarb:24,fill:2000,calcium:'low',preference:'either',dose:'standard',sleep:8,longSolution:'auto',icoSafe:true};
 let count=0;function test(name,fn){fn();count++;console.log('PASS',name);}
 test('No PET needed for initiation',()=>{const a=PD.assess(d);assert.equal(a.missing.length,0);assert.equal(a.mode,'CAPD');assert.equal(a.pet,null);});
 test('Zero urine is a value, missing urine blocks',()=>{assert.equal(PD.assess({...d,urine:0}).missing.length,0);assert(PD.assess({...d,urine:''}).missing.includes('每日尿量'));});
@@ -17,4 +17,9 @@ test('CAPD schedule >24h invalid and ico max once daily',()=>{const a=PD.assess(
 test('APD bags include priming, last fill counted once',()=>{const a=PD.assess(pd),rx=PD.initialRx(pd,a);Object.assign(rx,{fillDrain:25,initialDrain:15,lastFillTime:10,prime:500});const v=PD.validateRx(rx,pd,a,C);assert.equal(v.total,12000);assert.equal(v.errors.length,0);assert.equal(v.bags.find(x=>x.product.code==='I15D50L').count,3);assert.equal(v.bags.find(x=>x.product.code==='IEXTRA1').count,1);});
 test('Missing timing blocks APD export; impossible time detected',()=>{const a=PD.assess(pd),rx=PD.initialRx(pd,a);assert(PD.validateRx(rx,pd,a,C).errors.length);Object.assign(rx,{fillDrain:90,initialDrain:90,lastFillTime:90,prime:500});assert(PD.validateRx(rx,pd,a,C).errors.some(x=>x.includes('無有效留置')));});
 test('Nutrineal not automatically selected and acidosis blocked',()=>{const a=PD.assess(d),rx=PD.initialRx(d,a);assert(!rx.rows.some(r=>r.kind==='aa'));rx.rows[0].kind='aa';assert(PD.validateRx(rx,{...d,bun:60,bicarb:18},a,C).errors.some(x=>x.includes('Nutrineal')));});
+
+
+test('Initial requires baseline renal data but no Kt/V',()=>{assert(PD.assess({...d,serumCr:'',egfr:''}).missing.some(x=>x.includes('初始腎功能')));assert.equal(PD.assess({...d,renalKtv:'',pdKtv:''}).missing.length,0);assert.equal(PD.assess({...d,renalKtv:1,pdKtv:1.2}).ktv,null);});
+ test('Measured clearance average and quality gate',()=>{assert.equal(PD.renal({...d,ccr:6,kru:2,collection:'valid'}).mean,4);assert.equal(PD.renal({...d,ccr:6,kru:2,collection:'unknown'}).mean,null);assert(PD.assess({...d,dose:'incremental',incrementalSafe:true,collection:'valid',ccr:6,kru:2}).missing.length===0);assert(PD.assess({...d,dose:'incremental',incrementalSafe:true,collection:'valid',ccr:6}).missing.length>0);assert(PD.assess({...d,dose:'incremental',incrementalSafe:true,collection:'valid',kru:0}).missing.length>0);});
+
 console.log(`${count} meaningful clinical and arithmetic checks passed`);
