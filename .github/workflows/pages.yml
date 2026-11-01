@@ -25,6 +25,7 @@ jobs:
         run: |
           node --check dist/app.js
           node --check dist/engine.js
+          node --check dist/teach.js
           node tests.cjs
       - name: Install browser test runtime
         run: |
